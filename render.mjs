@@ -41,10 +41,12 @@ if (args.multiprocess) {
     !/^--shard(?:=|$)/.test(a)
   );
   console.log(`launching ${processes} independent Chrome render processes × ${perProcessWorkers} page worker(s)`);
+  const mpStart = Date.now();
   const children = Array.from({ length: processes }, (_, i) =>
     run(process.execPath, [resolve('render.mjs'), ...forwarded, `--workers=${perProcessWorkers}`, `--shard=${i}/${processes}`])
   );
   await Promise.all(children);
+  console.log(`multiprocess render finished in ${((Date.now() - mpStart) / 1000).toFixed(1)}s`);
   process.exit(0);
 }
 
