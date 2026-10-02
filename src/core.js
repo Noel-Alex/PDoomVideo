@@ -206,7 +206,23 @@ function composite(t) {
   c.globalCompositeOperation = 'source-over';
   drawKaraokeText(c);
 }
-window.renderAt = async (t, type = 'image/png', q = .92) => { T = t; await redraw(); composite(t); return outC.toDataURL(type, q); };
+// Split drawing/compositing from image encoding so the renderer can capture the
+// finished canvas through Chrome's compositor instead of forcing a per-frame
+// canvas.toDataURL() + base64 round-trip.
+window.renderFrame = async t => {
+  T = t;
+  const t0 = performance.now();
+  await redraw();
+  const t1 = performance.now();
+  composite(t);
+  const t2 = performance.now();
+  return { drawMs: t1 - t0, compositeMs: t2 - t1 };
+};
+window.encodeFrame = (type = 'image/png', q = .92) => outC.toDataURL(type, q);
+window.renderAt = async (t, type = 'image/png', q = .92) => {
+  await window.renderFrame(t);
+  return window.encodeFrame(type, q);
+};
 // Contact sheet of several times, for quick visual checks: returns { url, ms[] }.
 window.renderSheet = async (times, cols = 3, w = 640) => {
   const h = Math.round(w * 9 / 16), rows = Math.ceil(times.length / cols), sc = document.createElement('canvas');
