@@ -59,11 +59,19 @@ npm install
 node render.mjs --bench=23:24 --worker-list=1,2,3,4,6
 ```
 
-Then use the worker count reported as `best`:
+Then use the worker count reported as `best`. You can also try true multi-process rendering, which gives each shard its own Chrome process and is often better for CPU-heavy p5.brush geometry on high-core-count CPUs:
 
 ```bash
-node render.mjs --frames=0:156.6 --workers=3   # replace 3 with the benchmark winner; resumable
-node render.mjs --encode --out=out/pdoom.mp4  # NVENC is selected automatically when available
+node render.mjs --frames=0:156.6 --workers=3       # replace 3 with the page-worker benchmark winner
+node render.mjs --frames=0:156.6 --multiprocess=4  # alternative: four independent Chrome processes
+node render.mjs --encode --out=out/pdoom.mp4       # NVENC is selected automatically when available
+```
+
+For a quick A/B on your machine, use separate output folders so neither run resumes from the other's frames:
+
+```bash
+node render.mjs --frames=23:25 --workers=3 --frames-dir=out/bench-pages
+node render.mjs --frames=23:25 --multiprocess=4 --frames-dir=out/bench-mp4
 ```
 
 Useful diagnostics and fallbacks:
