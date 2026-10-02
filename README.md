@@ -50,10 +50,31 @@ The video took two generations, both in Claude Code:
 
 You need Node.js, Google Chrome and ffmpeg. The song is included at `assets/pdoom.mp3`.
 
+The renderer now explicitly enables hardware GPU support in headless Chrome, uses an exact 1920×1080 Chrome surface capture by default instead of sending a base64 `canvas.toDataURL()` across Puppeteer for every frame, and automatically uses NVIDIA NVENC for the final H.264 encode when ffmpeg exposes `h264_nvenc`.
+
+First benchmark the worker count on your machine:
+
 ```bash
 npm install
-node render.mjs --frames=0:156.6 --workers=4   # paint every frame into out/frames (resumable)
-node render.mjs --encode --out=out/pdoom.mp4   # join the frames and the song into an MP4
+node render.mjs --bench=23:24 --worker-list=1,2,3,4,6
 ```
+
+Then use the worker count reported as `best`:
+
+```bash
+node render.mjs --frames=0:156.6 --workers=3   # replace 3 with the benchmark winner; resumable
+node render.mjs --encode --out=out/pdoom.mp4  # NVENC is selected automatically when available
+```
+
+Useful diagnostics and fallbacks:
+
+```bash
+node render.mjs --stills=23.8 --out=out/gpu-test
+node render.mjs --frames=0:5 --workers=3 --capture=dataurl  # original export path for comparison
+node render.mjs --frames=0:5 --workers=3 --headful          # visible Chrome, useful on hybrid-GPU laptops
+node render.mjs --encode --encoder=cpu --out=out/pdoom.mp4  # force libx264
+```
+
+At startup the renderer prints the WebGL GPU. On an NVIDIA system you should see an ANGLE / NVIDIA / Direct3D11 renderer, not SwiftShader. The default screenshot capture keeps the output canvas at exactly 1920×1080 CSS pixels to avoid resampling.
 
 If Chrome isn't installed at the default Windows path, add `--chrome=<path to chrome>`.
