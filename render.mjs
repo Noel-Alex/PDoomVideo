@@ -3,7 +3,8 @@
 //   node render.mjs --stills=0.8,3,23.8 --out=out/test                          full-res PNG stills
 //   node render.mjs --clip=0:6 --fps=24 --out=out/test.mp4                      short clip with audio
 //   node render.mjs --frames=0:156.6 --workers=3                                full-res JPEG frames → out/frames (resumable)
-//   node render.mjs --bench=23:24 --worker-list=1,2,3,4,6                       benchmark worker counts
+//   node render.mjs --bench=23:24 --worker-list=1,2,3,4,6                       benchmark page-worker counts
+//   node render.mjs --frames=0:156.6 --multiprocess=4                            four independent Chrome processes
 //   node render.mjs --encode [--encoder=auto] [--out=out/pdoom.mp4]             frames + song → MP4 (NVENC when available)
 //   Add --capture=dataurl to use the original canvas.toDataURL() export path.
 //   node render.mjs --loop=recursion [--out=out/loop_recursion]                 one cycle of a standalone loop (PNGs)
@@ -17,7 +18,7 @@ import { pathToFileURL } from 'node:url';
 const args = Object.fromEntries(process.argv.slice(2).map(a => { const [k, v] = a.replace(/^--/, '').split('='); return [k, v ?? true]; }));
 const CHROME = args.chrome || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 const DUR = 156.6, fps = +(args.fps || 24);
-const FRAMES_DIR = 'out/frames';
+const FRAMES_DIR = String(args['frames-dir'] || 'out/frames');
 const CAPTURE = String(args.capture || 'screenshot').toLowerCase();
 const FAST_CAPTURE = !args['no-fast-capture'];
 const DEFAULT_WORKERS = 3;
@@ -25,6 +26,27 @@ const JPEG_QUALITY = Math.max(1, Math.min(100, Math.round(+(args.quality || 94))
 if (!['screenshot', 'dataurl'].includes(CAPTURE)) throw new Error(`Unknown --capture=${CAPTURE}; expected screenshot or dataurl`);
 
 const run = (cmd, a) => new Promise((ok, bad) => { const p = spawn(cmd, a, { stdio: 'inherit' }); p.on('close', c => c ? bad(new Error(cmd + ' exited ' + c)) : ok()); });
+
+// Multi-process frame rendering: each child gets its own Chrome process/GPU
+// process and a disjoint frame shard. This can scale CPU-heavy p5.brush
+// geometry generation better than many pages inside one browser.
+if (args.multiprocess) {
+  if (!args.frames) throw new Error('--multiprocess requires --frames=a:b');
+  const processes = Math.max(1, Math.floor(+args.multiprocess));
+  const perProcessWorkers = Math.max(1, Math.floor(+(args['per-process-workers'] || 1)));
+  const forwarded = process.argv.slice(2).filter(a =>
+    !/^--multiprocess(?:=|$)/.test(a) &&
+    !/^--per-process-workers(?:=|$)/.test(a) &&
+    !/^--workers(?:=|$)/.test(a) &&
+    !/^--shard(?:=|$)/.test(a)
+  );
+  console.log(`launching ${processes} independent Chrome render processes × ${perProcessWorkers} page worker(s)`);
+  const children = Array.from({ length: processes }, (_, i) =>
+    run(process.execPath, [resolve('render.mjs'), ...forwarded, `--workers=${perProcessWorkers}`, `--shard=${i}/${processes}`])
+  );
+  await Promise.all(children);
+  process.exit(0);
+}
 
 if (args.encode) {
   const out = args.out || 'out/pdoom.mp4', n = readdirSync(FRAMES_DIR).filter(f => f.endsWith('.jpg')).length;
@@ -169,8 +191,22 @@ if (args.sheet) {
   const [a, b] = String(args.frames).split(':').map(Number), workers = +(args.workers || DEFAULT_WORKERS);
   mkdirSync(FRAMES_DIR, { recursive: true });
   const first = Math.round(a * fps), last = Math.min(Math.ceil(DUR * fps) - 1, Math.round(b * fps) - 1);
-  const todo = []; for (let i = first; i <= last; i++) { const f = `${FRAMES_DIR}/f${String(i).padStart(5, '0')}.jpg`; if (!existsSync(f) || statSync(f).size < 1000) todo.push(i); }
-  console.log(`${todo.length} frames to render (${last - first + 1 - todo.length} already done), ${workers} workers`);
+  let shardIndex = 0, shardCount = 1;
+  if (args.shard) {
+    const p = String(args.shard).split('/').map(Number);
+    if (p.length !== 2 || !Number.isInteger(p[0]) || !Number.isInteger(p[1]) || p[1] < 1 || p[0] < 0 || p[0] >= p[1]) {
+      throw new Error(`Bad --shard=${args.shard}; expected zero-based i/n, e.g. 0/4`);
+    }
+    [shardIndex, shardCount] = p;
+  }
+  const todo = [];
+  for (let i = first; i <= last; i++) {
+    if ((i - first) % shardCount !== shardIndex) continue;
+    const f = `${FRAMES_DIR}/f${String(i).padStart(5, '0')}.jpg`;
+    if (!existsSync(f) || statSync(f).size < 1000) todo.push(i);
+  }
+  const totalInShard = Math.floor((last - first - shardIndex) / shardCount) + 1;
+  console.log(`${todo.length} frames to render (${Math.max(0, totalInShard - todo.length)} already done), ${workers} workers${shardCount > 1 ? `, shard ${shardIndex + 1}/${shardCount}` : ''}`);
   let next = 0, done = 0; const start = Date.now();
   const work = async w => {
     const page = await openPage('#' + w);
